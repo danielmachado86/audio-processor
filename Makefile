@@ -1,71 +1,112 @@
-# Makefile para el procesador de audio en Raspberry Pi
+# Makefile for ALSA Audio Processor
 CXX = g++
 CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -pthread
-LDFLAGS = -lasound -pthread -lm
+LDFLAGS = -lasound -pthread
+
+# Debug flags
+DEBUG_FLAGS = -g -DDEBUG -O0
+RELEASE_FLAGS = -O3 -DNDEBUG -march=native
 
 TARGET = audio_processor
 SOURCE = audio_processor.cpp
 
-# Directorios
-SRCDIR = src
-OBJDIR = obj
-BINDIR = bin
+# Default build
+all: $(TARGET)
 
-# Crear directorios si no existen
-$(shell mkdir -p $(OBJDIR) $(BINDIR))
-
-# Regla principal
-$(BINDIR)/$(TARGET): $(SOURCE)
+$(TARGET): $(SOURCE)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
-# Regla de limpieza
-clean:
-	rm -rf $(OBJDIR) $(BINDIR)
+# Debug build
+debug: CXXFLAGS += $(DEBUG_FLAGS)
+debug: $(TARGET)
 
-# Regla para instalar dependencias en Raspberry Pi
+# Release build
+release: CXXFLAGS += $(RELEASE_FLAGS)
+release: $(TARGET)
+
+# Clean
+clean:
+	rm -f $(TARGET)
+
+# Install ALSA development libraries
 install-deps:
+	@echo "Installing ALSA development dependencies..."
 	sudo apt-get update
 	sudo apt-get install -y libasound2-dev build-essential
 
-# Regla para configurar audio en Raspberry Pi
-setup-audio:
-	@echo "Configurando audio en Raspberry Pi..."
-	@echo "1. Verificando dispositivos de audio disponibles:"
+# List audio devices
+list-devices:
+	@echo "=== Audio Capture Devices ==="
+	arecord -l
+	@echo ""
+	@echo "=== Audio Playback Devices ==="
 	aplay -l
 	@echo ""
-	@echo "2. Configurando ALSA..."
-	sudo modprobe snd-bcm2835
-	@echo "3. Configuración completada"
+	@echo "=== ALSA Cards ==="
+	cat /proc/asound/cards
 
-# Regla para ejecutar con privilegios de audio
-run: $(BINDIR)/$(TARGET)
-	@echo "Iniciando procesador de audio..."
-	@echo "Asegúrate de tener un micrófono y altavoces conectados"
-	sudo $(BINDIR)/$(TARGET)
+# Test audio setup
+test-audio:
+	@echo "Testing audio capture (5 seconds)..."
+	timeout 5 arecord -f cd -t raw | aplay -f cd -
+	@echo "Audio test completed"
 
-# Regla para debug
-debug: CXXFLAGS += -g -DDEBUG
-debug: $(BINDIR)/$(TARGET)
+# Run with default devices
+run: $(TARGET)
+	./$(TARGET)
 
-# Regla para optimización máxima
-release: CXXFLAGS += -O3 -DNDEBUG -march=native
-release: $(BINDIR)/$(TARGET)
+# Run with specific devices (example)
+run-hw: $(TARGET)
+	./$(TARGET) hw:0,0 hw:0,0
 
-# Regla para verificar la configuración del sistema
-check-system:
-	@echo "=== Verificación del sistema ==="
-	@echo "Kernel: $(shell uname -r)"
-	@echo "Procesador: $(shell cat /proc/cpuinfo | grep 'model name' | head -1 | cut -d':' -f2)"
-	@echo "Memoria: $(shell free -h | grep Mem | awk '{print $$2}')"
+# Run with USB audio devices
+run-usb: $(TARGET)
+	./$(TARGET) hw:1,0 hw:1,0
+
+# Show ALSA configuration
+show-config:
+	@echo "=== ALSA Configuration ==="
+	@echo "Default PCM device:"
+	@cat ~/.asoundrc 2>/dev/null || echo "No user ALSA config found"
 	@echo ""
-	@echo "=== Configuración de audio ==="
-	@echo "Dispositivos de reproducción:"
-	@aplay -l 2>/dev/null || echo "No se encontraron dispositivos de reproducción"
+	@echo "System ALSA config:"
+	@cat /etc/asound.conf 2>/dev/null || echo "No system ALSA config found"
 	@echo ""
-	@echo "Dispositivos de captura:"
-	@arecord -l 2>/dev/null || echo "No se encontraron dispositivos de captura"
-	@echo ""
-	@echo "=== Configuración ALSA ==="
-	@cat /proc/asound/cards 2>/dev/null || echo "No se encontró información de tarjetas de sonido"
+	@echo "Available PCM devices:"
+	@aplay -L | head -20
 
-.PHONY: clean install-deps setup-audio run debug release check-system
+# Configure ALSA for low latency
+configure-lowlatency:
+	@echo "Configuring ALSA for low latency..."
+	@echo "pcm.!default {" > ~/.asoundrc
+	@echo "    type asym" >> ~/.asoundrc
+	@echo "    playback.pcm \"playback\"" >> ~/.asoundrc
+	@echo "    capture.pcm \"capture\"" >> ~/.asoundrc
+	@echo "}" >> ~/.asoundrc
+	@echo "" >> ~/.asoundrc
+	@echo "pcm.playback {" >> ~/.asoundrc
+	@echo "    type plug" >> ~/.asoundrc
+	@echo "    slave {" >> ~/.asoundrc
+	@echo "        pcm \"hw:0,0\"" >> ~/.asoundrc
+	@echo "        period_time 5805" >> ~/.asoundrc
+	@echo "        buffer_time 23220" >> ~/.asoundrc
+	@echo "    }" >> ~/.asoundrc
+	@echo "}" >> ~/.asoundrc
+	@echo "" >> ~/.asoundrc
+	@echo "pcm.capture {" >> ~/.asoundrc
+	@echo "    type plug" >> ~/.asoundrc
+	@echo "    slave {" >> ~/.asoundrc
+	@echo "        pcm \"hw:0,0\"" >> ~/.asoundrc
+	@echo "        period_time 5805" >> ~/.asoundrc
+	@echo "        buffer_time 23220" >> ~/.asoundrc
+	@echo "    }" >> ~/.asoundrc
+	@echo "}" >> ~/.asoundrc
+	@echo "Low latency ALSA configuration created in ~/.asoundrc"
+
+# Monitor system resources
+monitor:
+	@echo "Monitoring system resources (Ctrl+C to stop)..."
+	@echo "CPU usage, Memory usage, Audio processes:"
+	watch -n 1 'ps aux | grep -E "(alsa|audio|$(TARGET))" | grep -v grep; echo ""; free -h | head -2; echo ""; uptime'
+
+.PHONY: all debug release clean install-deps list-devices test-audio run run-hw run-usb show-config configure-lowlatency monitor
